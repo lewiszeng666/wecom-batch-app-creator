@@ -23,7 +23,6 @@ WECOM_LOGIN = "https://work.weixin.qq.com/wework_admin/loginpage_wx"
 
 def load_config(config_path: str = "config.json") -> dict:
     if not Path(config_path).exists():
-        # 使用默认配置
         return {"browser_data_dir": "browser_data"}
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -44,8 +43,14 @@ def save_session(config_path: str = "config.json"):
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
+                "--window-size=1280,800",
             ],
             ignore_default_args=["--enable-automation"],
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
         )
         page = browser.pages[0] if browser.pages else browser.new_page()
         page.goto(WECOM_LOGIN, wait_until="domcontentloaded")
@@ -54,21 +59,23 @@ def save_session(config_path: str = "config.json"):
         print("  操作步骤：")
         print("  1. 在弹出的浏览器窗口中，用企业微信 App 扫码")
         print("  2. 手机上点击「确认登录」")
-        print("  3. 等待浏览器跳转到企业微信后台首页")
-        print("  4. 确认已进入后台后，回到此终端按 Enter 保存会话")
+        print("  3. 如有多企业选择页，选择对应企业")
+        print("  4. 等待浏览器跳转到企业微信后台（看到应用列表等内容）")
+        print("  5. 确认已进入后台后，回到此终端按 Enter 保存会话")
         print("═" * 60 + "\n")
 
-        # 同时在后台轮询 URL，如果自动跳转了就提示用户
+        # 后台监听 URL 变化，自动提示
         import threading
 
         def watch_url():
-            for _ in range(120):
+            for _ in range(180):  # 最多等 3 分钟
                 time.sleep(1)
                 try:
                     current_url = page.url
-                    if "frame" in current_url and "loginpage" not in current_url:
-                        print(f"\n✅ 检测到登录成功！当前 URL: {current_url}")
-                        print("   请按 Enter 保存会话并关闭浏览器\n")
+                    # 只要离开了 loginpage 就提示
+                    if "loginpage" not in current_url and "work.weixin.qq.com" in current_url:
+                        print(f"\n✅ 检测到页面已跳转: {current_url}")
+                        print("   如果已看到企业微信后台内容，请按 Enter 保存会话\n")
                         return
                 except Exception:
                     pass
@@ -78,18 +85,20 @@ def save_session(config_path: str = "config.json"):
 
         input("登录完成后按 Enter 键保存会话并关闭浏览器...")
 
-        # 验证登录状态
+        # 打印当前 URL，帮助调试
         try:
             current_url = page.url
-            if "loginpage" in current_url or "login" in current_url.lower():
-                logger.warning("⚠️  检测到当前仍在登录页，会话可能未保存成功")
-                logger.warning("   请确认已在企业微信 App 上点击「确认登录」后再保存")
-            else:
-                logger.info(f"✅ 登录状态确认，当前 URL: {current_url}")
+            print(f"\n当前 URL: {current_url}")
+
+            # 放宽判断：只要不是 loginpage 就认为登录成功
+            if "loginpage" not in current_url:
                 logger.info("✅ 会话已保存到 browser_data/ 目录")
-                logger.info("   现在可以运行 python main.py 开始批量创建应用")
-        except Exception:
-            logger.info("会话已保存（无法验证 URL）")
+                logger.info("   现在可以运行: python main.py --no-headless")
+            else:
+                logger.warning("⚠️  当前仍在登录页，会话可能未保存成功")
+                logger.warning("   请重新运行 save_cookie.py，确保扫码并在手机上确认登录后再按 Enter")
+        except Exception as e:
+            logger.info(f"会话已保存（URL 读取异常: {e}）")
 
         browser.close()
 
