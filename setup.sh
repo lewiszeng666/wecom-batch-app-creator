@@ -27,16 +27,19 @@ else
     echo "✅ 虚拟环境已存在: $VENV_DIR"
 fi
 
-# 3. 激活虚拟环境并安装依赖
-source "$VENV_DIR/bin/activate"
+# 3. 直接用 venv 内的 pip/playwright 安装（不需要 source 激活）
+PIP="$VENV_DIR/bin/pip"
+PLAYWRIGHT="$VENV_DIR/bin/playwright"
+PYTHON_VENV="$VENV_DIR/bin/python"
+
 echo "📦 安装 Python 依赖..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+"$PIP" install --upgrade pip -q
+"$PIP" install -r requirements.txt -q
 echo "✅ Python 依赖安装完成"
 
 # 4. 安装 Playwright Chromium
 echo "📦 安装 Playwright Chromium（首次约 200MB，请稍候）..."
-playwright install chromium
+"$PLAYWRIGHT" install chromium
 echo "✅ Playwright Chromium 安装完成"
 
 echo ""
