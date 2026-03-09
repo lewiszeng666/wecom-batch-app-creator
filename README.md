@@ -14,13 +14,31 @@
 
 ### 1. 安装依赖
 
+> **Ubuntu 22.04+ 用户注意**：系统 Python 受保护，不能直接 `pip install`，请使用下方的一键脚本或手动 venv 方式。
+
+**方式一：一键安装脚本（推荐）**
+
+```bash
+git clone https://github.com/lewiszeng666/wecom-batch-app-creator.git
+cd wecom-batch-app-creator
+bash setup.sh
+```
+
+脚本会自动创建 `.venv` 虚拟环境、安装所有依赖和 Playwright Chromium。
+
+**方式二：手动 venv**
+
 ```bash
 git clone https://github.com/lewiszeng666/wecom-batch-app-creator.git
 cd wecom-batch-app-creator
 
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
 ```
+
+> 后续每次运行前需先激活虚拟环境：`source .venv/bin/activate`
 
 ### 2. 配置
 
