@@ -1,0 +1,23 @@
+{
+  "_comment": "企业微信批量创建应用工具配置文件，复制此文件为 config.json 并按需修改。所有字段均可通过命令行参数覆盖。",
+
+  "corp_id": "ww95aca10dfcf3d6e2",
+
+  "visible_member": "曾君亮",
+
+  "create_count": 3,
+
+  "openclaw_ip": "101.35.102.240",
+
+  "app_name_prefix": "openclaw",
+
+  "app_description": "与openclaw通信通道",
+
+  "logo_path": "openclaw_logo.png",
+
+  "output_file": "output/app_configs.json",
+
+  "headless": true,
+
+  "browser_data_dir": "browser_data"
+}

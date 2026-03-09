@@ -1,0 +1,21 @@
+# 浏览器会话（含登录 Cookie，不提交）
+browser_data/
+
+# 输出文件（含 AgentId/Token 等敏感信息，不提交）
+output/
+
+# 运行日志
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# 临时文件
+*.tmp
+*.bak
+openclaw_logo_raw.jpg
