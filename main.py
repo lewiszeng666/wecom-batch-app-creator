@@ -102,6 +102,12 @@ def main():
         action="store_true",
         help="有头模式：显示浏览器操作过程（调试用）",
     )
+    parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        dest="no_headless",
+        help="关闭 headless 模式（本地调试推荐，可观察浏览器操作）",
+    )
     args = parser.parse_args()
 
     # ── 加载配置文件 ──
@@ -129,7 +135,7 @@ def main():
         config["create_count"] = args.count
     if args.ip:
         config["openclaw_ip"] = args.ip
-    if args.visible:
+    if args.visible or args.no_headless:
         config["headless"] = False
 
     # ── 填充默认值（如果配置文件中也没有）──

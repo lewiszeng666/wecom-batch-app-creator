@@ -907,9 +907,22 @@ class BatchAppCreator:
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                # 反检测：企微会检测 headless 标志，加这些参数绕过
                 "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-web-security",
+                "--allow-running-insecure-content",
+                # 伪装正常窗口大小
+                "--window-size=1280,800",
             ],
             ignore_default_args=["--enable-automation"],
+            # 伪装正常用户 User-Agent（去掉 HeadlessChrome 标志）
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
         )
         if chromium_path:
             launch_kwargs["executable_path"] = chromium_path
