@@ -384,6 +384,7 @@ def create_single_app(
             "token": str,
             "aes_key": str,
             "webhook_url": str,
+            "visible_member": str,
             "error": str (仅失败时)
         }
     """
@@ -397,6 +398,7 @@ def create_single_app(
         "token": "",
         "aes_key": "",
         "webhook_url": f"http://{openclaw_ip}:3000/wecom",
+        "visible_member": visible_member,
     }
 
     logger.info(f"═══ 开始创建应用: {app_name} ═══")
