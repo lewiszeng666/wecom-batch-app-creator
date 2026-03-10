@@ -1048,15 +1048,57 @@ class BatchAppCreator:
             self._playwright.stop()
 
     def check_login(self) -> bool:
-        """检查企微后台登录状态。"""
+        """检查企微后台登录状态（兼容多标签页与重定向场景）。"""
+
+        def _is_backend_url(url: str) -> bool:
+            if not url:
+                return False
+            u = url.lower()
+            if "work.weixin.qq.com" not in u:
+                return False
+            if "loginpage" in u or "login" in u:
+                return False
+            return "/wework_admin/frame" in u
+
+        # 先用当前页探测
         self._page.goto(f"{WECOM_BASE}/frame#index", wait_until="domcontentloaded")
         time.sleep(2)
         current_url = self._page.url
-        if "loginpage" in current_url or "login" in current_url.lower():
-            logger.error("企微后台未登录，请先运行 save_cookie.py 完成扫码登录")
-            return False
-        logger.info("企微后台登录状态正常")
-        return True
+        if _is_backend_url(current_url):
+            logger.info("企微后台登录状态正常")
+            return True
+
+        # 当前页失败时，再开新页探测（避免旧标签停在登录页）
+        probe = None
+        try:
+            probe = self._browser.new_page()
+            probe.goto(f"{WECOM_BASE}/frame#index", wait_until="domcontentloaded")
+            time.sleep(2)
+            probe_url = probe.url
+            if _is_backend_url(probe_url):
+                self._page = probe
+                logger.info("企微后台登录状态正常（已切换到新标签页）")
+                return True
+        except Exception:
+            pass
+        finally:
+            try:
+                if probe and probe is not self._page:
+                    probe.close()
+            except Exception:
+                pass
+
+        # 失败时输出调试信息
+        try:
+            page_urls = [p.url for p in self._browser.pages]
+            logger.warning(f"当前页面列表: {page_urls}")
+            cookie_names = [c.get("name", "") for c in self._browser.cookies()]
+            logger.warning(f"已有 cookie: {cookie_names[:20]}")
+        except Exception:
+            pass
+
+        logger.error("企微后台未登录，请先运行 save_cookie.py 完成扫码登录")
+        return False
 
     def run(self) -> list:
         """

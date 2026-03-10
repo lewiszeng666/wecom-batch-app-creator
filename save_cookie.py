@@ -12,7 +12,8 @@ save_cookie.py
 import json
 import time
 import logging
-import threading
+import select
+import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -30,36 +31,26 @@ def load_config(config_path: str = "config.json") -> dict:
 
 
 def _is_logged_in(page) -> bool:
-    """
-    判断是否已登录企微后台。
-    策略（满足任意一条即认为已登录）：
-      1. URL 不含 loginpage_wx（已跳转到后台或中间页）
-      2. 页面 DOM 中存在企微后台导航元素（如 .ww_nav、#js_main 等）
-    """
+    """判断当前页是否已进入企微后台（严格模式，避免误判）。"""
     try:
-        url = page.url
-        # 策略 1：URL 已离开登录页
-        if "loginpage_wx" not in url and "work.weixin.qq.com" in url:
-            return True
-        # 策略 2：DOM 中检测到后台内容
+        url = (page.url or "").lower()
+        if "work.weixin.qq.com" not in url:
+            return False
+        if "loginpage" in url or "login" in url:
+            return False
+        if "/wework_admin/frame" not in url:
+            return False
+
+        # 要求出现后台容器特征，避免仅凭 URL 误判
         has_backend = page.evaluate("""
             () => {
-                // 企微后台特有的导航或主容器
                 var selectors = [
-                    '#js_main', '.ww_nav', '.js_leftNav',
+                    'iframe#main_frame', '#js_main', '.ww_nav', '.js_leftNav',
                     '#js_sidebar', '.frame_nav', '[class*="leftNav"]',
                     '.js_indexPage', '#js_frame'
                 ];
                 for (var s of selectors) {
                     if (document.querySelector(s)) return true;
-                }
-                // 检查 title 是否变为后台标题
-                var title = document.title;
-                if (title && title !== '企业微信' && title !== 'WeCom' && title.length > 2) {
-                    // 登录页 title 通常就是"企业微信"或"WeCom"
-                    return !document.querySelector('input[placeholder*="手机"]') &&
-                           !document.querySelector('.login_container') &&
-                           !document.querySelector('#loginForm');
                 }
                 return false;
             }
@@ -67,6 +58,35 @@ def _is_logged_in(page) -> bool:
         return bool(has_backend)
     except Exception:
         return False
+
+
+def _verify_session_by_backend_redirect(browser_context) -> tuple:
+    """主动探测会话是否可访问后台，返回 (是否成功, 最终URL)。"""
+    probe_urls = [
+        "https://work.weixin.qq.com/wework_admin/frame#index",
+        "https://work.weixin.qq.com/wework_admin/frame#/apps/applist",
+    ]
+    last_url = ""
+
+    for target in probe_urls:
+        p = None
+        try:
+            p = browser_context.new_page()
+            p.goto(target, wait_until="domcontentloaded")
+            time.sleep(2)
+            last_url = p.url
+            if _is_logged_in(p):
+                return True, last_url
+        except Exception:
+            pass
+        finally:
+            try:
+                if p:
+                    p.close()
+            except Exception:
+                pass
+
+    return False, last_url
 
 
 def save_session(config_path: str = "config.json"):
@@ -105,46 +125,84 @@ def save_session(config_path: str = "config.json"):
         print("  5. 确认已进入后台后，回到此终端按 Enter 保存会话")
         print("═" * 60 + "\n")
 
-        # 后台监听：自动检测跳转并提示
-        detected = threading.Event()
+        print("开始监听登录状态（最长 5 分钟）...")
+        print("提示：你可随时在终端按 Enter 手动继续，不必等满 5 分钟。")
 
-        def watch_url():
-            for _ in range(180):  # 最多等 3 分钟
+        manual_continue_available = sys.stdin.isatty()
+        login_ok = False
+
+        # 先等 3 秒让页面加载，再检测一次（处理自动恢复登录态的场景）
+        time.sleep(3)
+        try:
+            if _is_logged_in(page):
+                current_url = page.url
+                print(f"\n✅ 检测到已进入企微后台（自动恢复会话）: {current_url}")
+                login_ok = True
+        except Exception:
+            pass
+
+        if not login_ok:
+            for _i in range(300):
                 time.sleep(1)
+
+                # 仅在交互终端里允许按 Enter 手动继续（避免阻塞）
+                if manual_continue_available and select.select([sys.stdin], [], [], 0)[0]:
+                    _ = sys.stdin.readline()
+                    print("\n⌨️ 收到回车，继续保存会话...")
+                    break
+
                 try:
                     if _is_logged_in(page):
                         current_url = page.url
                         print(f"\n✅ 检测到已进入企微后台: {current_url}")
-                        print("   请按 Enter 保存会话\n")
-                        detected.set()
-                        return
+                        login_ok = True
+                        break
                 except Exception:
                     pass
 
-        watcher = threading.Thread(target=watch_url, daemon=True)
-        watcher.start()
+            if not login_ok:
+                if manual_continue_available:
+                    print("\n⚠️  若你已完成扫码并进入后台，可直接按 Enter 继续保存会话。")
+                    input("确认后按 Enter 保存会话并关闭浏览器...")
+                else:
+                    print("\n⚠️  当前为非交互环境，跳过手动 Enter 等待，继续尝试保存会话。")
 
-        input("登录完成后按 Enter 键保存会话并关闭浏览器...")
-
-        # 按 Enter 后再做一次检测
+        # 按 Enter 后做会话校验
         try:
             current_url = page.url
             print(f"\n当前 URL: {current_url}")
 
+            # 优先用当前页判断（已加载完毕，最可靠）
             if _is_logged_in(page):
                 logger.info("✅ 会话已保存到 browser_data/ 目录")
                 logger.info("   现在可以运行: python main.py")
             else:
-                # 最后兜底：只要 URL 不是纯登录页就认为成功
-                # （有时后台加载慢，DOM 还没渲染完）
-                if "work.weixin.qq.com" in current_url and "loginpage_wx" not in current_url:
-                    logger.info("✅ 会话已保存到 browser_data/ 目录（URL 已离开登录页）")
-                    logger.info("   现在可以运行: python main.py")
+                # 当前页可能还在登录页，但 URL 已含 frame → 等一下再试
+                url_lower = (current_url or "").lower()
+                if "/wework_admin/frame" in url_lower and "login" not in url_lower:
+                    # URL 已到后台，可能 DOM 还没渲染完，多等几秒
+                    time.sleep(3)
+                    page.reload(wait_until="domcontentloaded")
+                    time.sleep(3)
+                    if _is_logged_in(page):
+                        logger.info("✅ 会话已保存到 browser_data/ 目录")
+                        logger.info("   现在可以运行: python main.py")
+                    else:
+                        # 最后兜底：URL 已在后台就认为成功
+                        logger.info("✅ 会话已保存到 browser_data/ 目录（URL 已在后台页面）")
+                        logger.info("   现在可以运行: python main.py")
                 else:
-                    logger.warning("⚠️  当前仍在登录页，会话可能未保存成功")
-                    logger.warning("   请重新运行 save_cookie.py，确保扫码并在手机上确认登录后再按 Enter")
+                    # 真的还在登录页
+                    ok, probe_url = _verify_session_by_backend_redirect(browser)
+                    if ok:
+                        logger.info("✅ 会话已保存到 browser_data/ 目录")
+                        logger.info("   现在可以运行: python main.py")
+                    else:
+                        logger.warning("⚠️  会话校验失败：尚未进入可用后台登录态")
+                        logger.warning(f"   探测 URL: {probe_url or 'N/A'}")
+                        logger.warning("   请重新运行 save_cookie.py，扫码后在手机上确认并进入后台页面")
         except Exception as e:
-            logger.info(f"会话已保存（URL 读取异常: {e}）")
+            logger.warning(f"⚠️  会话校验异常: {e}")
 
         browser.close()
 
