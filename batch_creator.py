@@ -732,19 +732,17 @@ def create_single_app(
         logger.warning(f"读取 Token/AESKey 失败: {e}")
 
     # ── 保存 API 接收设置 ──
-    # 企微 API 接收设置保存按钮：class=js_save_api_setting 或文本「保存」/「Save」
+    # 企微 API 接收设置保存按钮：实测 class=js_save_callback
     logger.info("保存 API 接收设置...")
     api_save_ok = False
     try:
         page.evaluate("""
             () => {
-                // 优先用已验证 class
-                var btn = document.querySelector(
-                    '.js_save_api_setting, .js_save_setting, .js_api_save'
-                );
+                // 优先用实测验证的 class
+                var btn = document.querySelector('.js_save_callback');
                 if (btn && btn.offsetParent !== null) { btn.click(); return; }
                 // 备用：找「保存」/「Save」按钮（排除取消/Cancel）
-                var btns = document.querySelectorAll('button, a.btn, input[type=submit]');
+                var btns = document.querySelectorAll('a, button, input[type=submit]');
                 for (var b of btns) {
                     var t = b.textContent.trim();
                     if ((t === '保存' || t === 'Save') && b.offsetParent !== null) {
@@ -796,22 +794,22 @@ def create_single_app(
         logger.warning(f"保存 API 接收设置失败: {e}")
 
     # ── 触发 Secret 发送到企微 App ──
-    # 流程：回到应用详情页 → 找到 Secret 旁的「查看」按钮 → 弹窗中点「发送」
+    # 流程：先回到应用列表页（重置 SPA 路由缓存）→ 再进入应用详情页 → 找到 Secret 旁的「查看」按钮 → 弹窗中点「发送」
     logger.info("触发 Secret 发送到管理员企微 App...")
     try:
-        # 回到应用详情页
+        # 先跳到应用列表页，重置 SPA 路由状态（避免停留在 API 接收设置页）
+        page.goto(f"{WECOM_BASE}/frame#/apps/applist", wait_until="domcontentloaded")
+        time.sleep(1.5)
+        # 再跳到应用详情页
         page.goto(f"{WECOM_BASE}/frame#apps/modApiApp/{agent_id}", wait_until="domcontentloaded")
         time.sleep(2.5)
 
         # 找 Secret 字段旁的「查看」按钮
-        # 企微 Secret 区域通常有 class js_secret 或 data-field="secret"
-        # 「查看」按钮在 Secret 行内，class 通常含 js_view_secret 或 js_send_secret
+        # 实测：企微 Secret 查看按钮的 class 为 js_sendSecret
         clicked_view = page.evaluate("""
             () => {
-                // 优先用已知 class
-                var btn = document.querySelector(
-                    '.js_view_secret, .js_send_secret, .js_secret_view, .js_get_secret'
-                );
+                // 优先用实测验证的 class
+                var btn = document.querySelector('.js_sendSecret');
                 if (btn && btn.offsetParent !== null) { btn.click(); return 'class_match'; }
 
                 // 备用：找 Secret 所在行的「查看」/「View」按钮
