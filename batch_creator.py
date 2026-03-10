@@ -735,63 +735,142 @@ def create_single_app(
 
     # ── 保存 API 接收设置 ──
     # 企微 API 接收设置保存按钮：实测 class=js_save_callback
+    # 注意：企微保存时会验证 URL，需要等待验证结果
     logger.info("保存 API 接收设置...")
     api_save_ok = False
     try:
-        page.evaluate("""
+        # 先打印当前页面上的按钮，便于调试
+        btns_info = page.evaluate("""
             () => {
-                // 优先用实测验证的 class
-                var btn = document.querySelector('.js_save_callback');
-                if (btn && btn.offsetParent !== null) { btn.click(); return; }
-                // 备用：找「保存」/「Save」按钮（排除取消/Cancel）
-                var btns = document.querySelectorAll('a, button, input[type=submit]');
+                var result = [];
+                var btns = document.querySelectorAll('a.qui_btn, button, input[type=submit], .js_save_callback, a[class*="save"], a[class*="btn"]');
                 for (var b of btns) {
-                    var t = b.textContent.trim();
-                    if ((t === '保存' || t === 'Save') && b.offsetParent !== null) {
-                        b.click();
-                        return;
+                    if (b.offsetParent !== null) {
+                        result.push({
+                            tag: b.tagName,
+                            text: b.textContent.trim().substring(0, 30),
+                            className: b.className.substring(0, 80),
+                            id: b.id || ''
+                        });
                     }
                 }
+                return result;
             }
         """)
-        time.sleep(2)
+        logger.info(f"页面可见按钮: {btns_info[:15]}")
 
-        # 检查是否保存成功（等待成功提示 toast 或 URL 变化）
-        for _ in range(15):
+        # 方法1：使用 Playwright 的 click() 方法（更可靠）
+        save_btn_selectors = [
+            '.js_save_callback',
+            'a.qui_btn:has-text("保存")',
+            'a.qui_btn:has-text("Save")',
+            'button:has-text("保存")',
+            'button:has-text("Save")',
+            '.qui_btn_primary',
+        ]
+
+        clicked = False
+        for selector in save_btn_selectors:
+            try:
+                btn = page.locator(selector).first
+                if btn.is_visible(timeout=1000):
+                    btn.click()
+                    logger.info(f"成功点击保存按钮: {selector}")
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not clicked:
+            # 方法2：使用 evaluate 兜底
+            clicked_js = page.evaluate("""
+                () => {
+                    // 找所有可能的保存按钮
+                    var selectors = ['.js_save_callback', '.qui_btn_primary', '.ww_btn_Blue'];
+                    for (var sel of selectors) {
+                        var btn = document.querySelector(sel);
+                        if (btn && btn.offsetParent !== null) {
+                            btn.click();
+                            return 'clicked:' + sel;
+                        }
+                    }
+
+                    // 找文字为「保存」的按钮
+                    var btns = document.querySelectorAll('a, button');
+                    for (var b of btns) {
+                        var t = b.textContent.trim();
+                        if ((t === '保存' || t === 'Save') && b.offsetParent !== null) {
+                            b.click();
+                            return 'clicked_text:' + t;
+                        }
+                    }
+                    return 'no_button_found';
+                }
+            """)
+            logger.info(f"JS 点击结果: {clicked_js}")
+            clicked = clicked_js.startswith('clicked')
+
+        # 等待保存完成（企微会验证 URL，可能需要较长时间）
+        time.sleep(3)
+
+        # 检查是否保存成功
+        for i in range(20):
             saved = page.evaluate("""
                 () => {
-                    // 企微保存成功后通常有 toast 提示或页面跳转
+                    // 企微保存成功后通常有 toast 提示
                     var toast = document.querySelector(
                         '.ww_toast, .js_toast, .qui_toast, .ww_success, [class*="toast"], [class*="success"]'
                     );
                     if (toast && toast.offsetParent !== null) {
                         var t = toast.textContent.trim();
                         if (t.includes('成功') || t.includes('保存') || t.includes('success') || t.includes('saved')) {
-                            return 'toast_success';
+                            return 'toast_success:' + t;
                         }
                     }
-                    // 检查错误提示
+
+                    // 检查错误提示（URL 验证失败等）
                     var err = document.querySelector(
-                        '.ww_form_error, .js_error_msg, .error_msg, [class*="error"]'
+                        '.ww_form_error, .js_error_msg, .error_msg, .qui_msg_error, [class*="error"]'
                     );
                     if (err && err.offsetParent !== null && err.textContent.trim()) {
-                        return 'error:' + err.textContent.trim().substring(0, 80);
+                        return 'error:' + err.textContent.trim().substring(0, 100);
                     }
+
+                    // 检查是否有加载中状态
+                    var loading = document.querySelector('.qui_loading, .ww_loading, [class*="loading"]');
+                    if (loading && loading.offsetParent !== null) {
+                        return 'loading';
+                    }
+
                     return 'waiting';
                 }
             """)
-            if saved == 'toast_success':
-                logger.info("API 接收设置保存成功")
+
+            if saved.startswith('toast_success'):
+                logger.info(f"API 接收设置保存成功: {saved}")
                 api_save_ok = True
                 break
-            elif saved and saved.startswith('error:'):
-                logger.warning(f"API 接收设置保存时出现提示: {saved[6:]}")
-                # 即使有错误提示也继续（可能是 URL 验证失败，但 Token/AESKey 已生成）
+            elif saved.startswith('error:'):
+                error_msg = saved[6:]
+                logger.warning(f"API 接收设置保存失败: {error_msg}")
+                # URL 验证失败是常见情况，记录但继续
+                if 'URL' in error_msg or 'url' in error_msg or '验证' in error_msg:
+                    logger.warning("可能是 URL 验证失败，请确保 OpenClaw 服务已启动并可访问")
                 break
+            elif saved == 'loading':
+                if i % 5 == 0:
+                    logger.info("正在验证 URL，请稍候...")
             time.sleep(0.5)
 
         if not api_save_ok:
-            logger.info("未检测到明确的保存成功提示，继续后续流程")
+            # 最后检查一次：页面是否已经回到应用详情页（保存成功后会跳转）
+            current_url = page.url
+            if "modApiApp" in current_url or "applist" in current_url:
+                logger.info("页面已跳转，API 接收设置可能已保存")
+                api_save_ok = True
+            else:
+                logger.warning("未检测到明确的保存成功提示")
+
     except Exception as e:
         logger.warning(f"保存 API 接收设置失败: {e}")
 
