@@ -731,57 +731,165 @@ def create_single_app(
     except Exception as e:
         logger.warning(f"读取 Token/AESKey 失败: {e}")
 
-    # ── 触发 Secret 发送到企微 App ──
-    logger.info("触发 Secret 发送到管理员企微 App...")
+    # ── 保存 API 接收设置 ──
+    # 企微 API 接收设置保存按钮：class=js_save_api_setting 或文本「保存」/「Save」
+    logger.info("保存 API 接收设置...")
+    api_save_ok = False
     try:
-        # 先点击保存（会失败，因为 URL 验证不通过，但 Token/AESKey 已记录）
         page.evaluate("""
             () => {
-                var btns = document.querySelectorAll('button, .btn');
+                // 优先用已验证 class
+                var btn = document.querySelector(
+                    '.js_save_api_setting, .js_save_setting, .js_api_save'
+                );
+                if (btn && btn.offsetParent !== null) { btn.click(); return; }
+                // 备用：找「保存」/「Save」按钮（排除取消/Cancel）
+                var btns = document.querySelectorAll('button, a.btn, input[type=submit]');
                 for (var b of btns) {
-                    if (b.textContent.includes('保存') || b.textContent.includes('Save')) {
+                    var t = b.textContent.trim();
+                    if ((t === '保存' || t === 'Save') && b.offsetParent !== null) {
                         b.click();
                         return;
                     }
                 }
             }
         """)
-        time.sleep(1)
-    except Exception:
-        pass
-
-    # 回到应用详情页触发 Secret 发送
-    try:
-        page.goto(f"{WECOM_BASE}/frame#apps/modApiApp/{agent_id}", wait_until="domcontentloaded")
         time.sleep(2)
 
-        # 点击 View Secret → Send
-        page.evaluate("""
+        # 检查是否保存成功（等待成功提示 toast 或 URL 变化）
+        for _ in range(15):
+            saved = page.evaluate("""
+                () => {
+                    // 企微保存成功后通常有 toast 提示或页面跳转
+                    var toast = document.querySelector(
+                        '.ww_toast, .js_toast, .qui_toast, .ww_success, [class*="toast"], [class*="success"]'
+                    );
+                    if (toast && toast.offsetParent !== null) {
+                        var t = toast.textContent.trim();
+                        if (t.includes('成功') || t.includes('保存') || t.includes('success') || t.includes('saved')) {
+                            return 'toast_success';
+                        }
+                    }
+                    // 检查错误提示
+                    var err = document.querySelector(
+                        '.ww_form_error, .js_error_msg, .error_msg, [class*="error"]'
+                    );
+                    if (err && err.offsetParent !== null && err.textContent.trim()) {
+                        return 'error:' + err.textContent.trim().substring(0, 80);
+                    }
+                    return 'waiting';
+                }
+            """)
+            if saved == 'toast_success':
+                logger.info("API 接收设置保存成功")
+                api_save_ok = True
+                break
+            elif saved and saved.startswith('error:'):
+                logger.warning(f"API 接收设置保存时出现提示: {saved[6:]}")
+                # 即使有错误提示也继续（可能是 URL 验证失败，但 Token/AESKey 已生成）
+                break
+            time.sleep(0.5)
+
+        if not api_save_ok:
+            logger.info("未检测到明确的保存成功提示，继续后续流程")
+    except Exception as e:
+        logger.warning(f"保存 API 接收设置失败: {e}")
+
+    # ── 触发 Secret 发送到企微 App ──
+    # 流程：回到应用详情页 → 找到 Secret 旁的「查看」按钮 → 弹窗中点「发送」
+    logger.info("触发 Secret 发送到管理员企微 App...")
+    try:
+        # 回到应用详情页
+        page.goto(f"{WECOM_BASE}/frame#apps/modApiApp/{agent_id}", wait_until="domcontentloaded")
+        time.sleep(2.5)
+
+        # 找 Secret 字段旁的「查看」按钮
+        # 企微 Secret 区域通常有 class js_secret 或 data-field="secret"
+        # 「查看」按钮在 Secret 行内，class 通常含 js_view_secret 或 js_send_secret
+        clicked_view = page.evaluate("""
             () => {
-                var links = document.querySelectorAll('a, button, span');
-                for (var l of links) {
-                    if (l.textContent.includes('查看') || l.textContent.includes('View')) {
-                        l.click();
-                        return;
+                // 优先用已知 class
+                var btn = document.querySelector(
+                    '.js_view_secret, .js_send_secret, .js_secret_view, .js_get_secret'
+                );
+                if (btn && btn.offsetParent !== null) { btn.click(); return 'class_match'; }
+
+                // 备用：找 Secret 所在行的「查看」/「View」按钮
+                // 先找包含 Secret 文字的容器
+                var secretLabels = [];
+                var allEls = document.querySelectorAll('*');
+                for (var el of allEls) {
+                    if (el.children.length === 0) {
+                        var t = el.textContent.trim();
+                        if (t === 'Secret' || t === 'Secret:') {
+                            secretLabels.push(el);
+                        }
                     }
                 }
+                // 在 Secret 标签的父容器内找「查看」按钮
+                for (var label of secretLabels) {
+                    var container = label;
+                    for (var i = 0; i < 5; i++) {
+                        container = container.parentElement;
+                        if (!container) break;
+                        var viewBtn = container.querySelector('a, button, span');
+                        if (viewBtn) {
+                            var btnText = viewBtn.textContent.trim();
+                            if (btnText.includes('查看') || btnText === 'View') {
+                                viewBtn.click();
+                                return 'label_search';
+                            }
+                        }
+                    }
+                }
+
+                // 最后兜底：页面中第一个可见的「查看」/「View」按钮
+                // （排除「查看文档」等非 Secret 相关按钮）
+                var links = document.querySelectorAll('a, button');
+                for (var l of links) {
+                    var lt = l.textContent.trim();
+                    if ((lt === '查看' || lt === 'View') && l.offsetParent !== null) {
+                        l.click();
+                        return 'fallback';
+                    }
+                }
+                return 'not_found';
             }
         """)
+        logger.info(f"Secret 查看按钮点击结果: {clicked_view}")
+        time.sleep(1.5)
+
+        # 等待「发送」弹窗出现并点击
+        # 企微 Secret 查看弹窗通常有「发送」/「Send」按钮
+        send_result = page.evaluate("""
+            () => {
+                // 找可见的「发送」/「Send」按钮
+                var btns = document.querySelectorAll('button, a, .btn');
+                for (var b of btns) {
+                    var t = b.textContent.trim();
+                    if ((t === '发送' || t === 'Send') && b.offsetParent !== null) {
+                        b.click();
+                        return 'sent';
+                    }
+                }
+                // 兜底：包含「发送」的按钮
+                for (var b of btns) {
+                    var t = b.textContent.trim();
+                    if ((t.includes('发送') || t.includes('Send')) && b.offsetParent !== null) {
+                        b.click();
+                        return 'sent_partial';
+                    }
+                }
+                return 'not_found';
+            }
+        """)
+        logger.info(f"Secret 发送按钮点击结果: {send_result}")
         time.sleep(1)
 
-        page.evaluate("""
-            () => {
-                var btns = document.querySelectorAll('button, a');
-                for (var b of btns) {
-                    if (b.textContent.includes('发送') || b.textContent.includes('Send')) {
-                        b.click();
-                        return;
-                    }
-                }
-            }
-        """)
-        time.sleep(1)
-        logger.info("Secret 发送触发完成，请在企微 App 查看")
+        if send_result in ('sent', 'sent_partial'):
+            logger.info("✅ Secret 发送触发成功，请在企微 App 查看通知")
+        else:
+            logger.warning("未找到发送按钮，请手动在企微 App 查看 Secret")
     except Exception as e:
         logger.warning(f"触发 Secret 发送失败: {e}")
 
